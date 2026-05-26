@@ -164,7 +164,7 @@ def get_ai_prediction_text(star_count):
         return (
             "🚀 **型態走勢：穩健看漲 (Buy)**\n\n"
             "趨勢明顯轉強，長短天期均線提供支撐。"
-            "若回測不破月線，仍屬偏多架構。"
+            "若回測不破短均線或近期支撐，仍屬偏多架構。"
         )
     if star_count == 3:
         return (
@@ -192,7 +192,7 @@ def get_ai_prediction_text(star_count):
 
 
 def prepare_chart_data(df_raw):
-    """補上均線與量均線。"""
+    """補上均線、量均線與短線風險指標。"""
     if df_raw is None or df_raw.empty:
         return pd.DataFrame()
 
@@ -208,11 +208,21 @@ def prepare_chart_data(df_raw):
     df["Vol_MA5"] = df["Volume"].rolling(window=5).mean()
     df["Volume_K"] = df["Volume"] / 1000
 
+    # ATR14：用來估算短線正常波動，不再把進場價綁死在月線。
+    prev_close = df["Close"].shift(1)
+    tr1 = df["High"] - df["Low"]
+    tr2 = (df["High"] - prev_close).abs()
+    tr3 = (df["Low"] - prev_close).abs()
+    df["TR"] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    df["ATR14"] = df["TR"].rolling(window=14).mean()
+    df["Low5"] = df["Low"].rolling(window=5).min()
+    df["Low10"] = df["Low"].rolling(window=10).min()
+
     return df
 
 
 def calc_stock_metrics(df_chart, volume_divisor=1000):
-    """依照你原本的邏輯計算星評、月線進場價、停損價。
+    """依照原本邏輯計算星評，進場價改為短線支撐，不再使用月線。
 
     台股成交量通常換算成「張」，所以 volume_divisor=1000。
     美股成交量通常顯示為「股」，所以 volume_divisor=1。
@@ -229,8 +239,11 @@ def calc_stock_metrics(df_chart, volume_divisor=1000):
     ma20 = float(df_chart["MA20"].iloc[-1])
     ma50 = float(df_chart["MA50"].iloc[-1])
     vol_ma5 = float(df_chart["Vol_MA5"].iloc[-1])
+    atr14 = float(df_chart["ATR14"].iloc[-1])
+    low5 = float(df_chart["Low5"].iloc[-1])
+    low10 = float(df_chart["Low10"].iloc[-1])
 
-    if pd.isna(current_price) or pd.isna(ma20) or pd.isna(ma50) or today_open == 0:
+    if pd.isna(current_price) or pd.isna(ma20) or pd.isna(ma50) or pd.isna(atr14) or today_open == 0:
         return None
 
     price_change = ((current_price - today_open) / today_open) * 100
@@ -249,6 +262,17 @@ def calc_stock_metrics(df_chart, volume_divisor=1000):
     if 0 < bias_ratio < 8.0:
         star_count += 1
 
+    # 進場價改成「短線回踩價」：
+    # 1. 參考 10 日線，避免追太高。
+    # 2. 參考最近 5 日低點，抓近期實際有買盤防守的位置。
+    # 3. 取兩者較高者當短線支撐，再略低 0.5% 掛單。
+    short_support = max(ma10, low5)
+    safe_entry = short_support * 0.995
+
+    # 停損價改成「近 10 日低點下緣」，不再用月線停損。
+    # 若跌破最近 10 日低點，代表短線支撐失守。
+    stop_loss = low10 * 0.985
+
     return {
         "current_price": current_price,
         "today_open": today_open,
@@ -258,11 +282,14 @@ def calc_stock_metrics(df_chart, volume_divisor=1000):
         "ma20": ma20,
         "ma50": ma50,
         "vol_ma5": vol_ma5,
+        "atr14": atr14,
+        "low5": low5,
+        "low10": low10,
         "price_change": price_change,
         "bias_ratio": bias_ratio,
         "star_count": star_count,
-        "safe_entry": ma20 * 0.99,
-        "stop_loss": ma20 * 0.95,
+        "safe_entry": safe_entry,
+        "stop_loss": stop_loss,
         "prediction_short": get_prediction_short(star_count),
         "prediction_text": get_ai_prediction_text(star_count)
     }
@@ -365,8 +392,8 @@ def render_single_stock_analysis(
             st.write("### 🗃️ 盤中真實數據面板")
             st.info(f"**📈 實際總成交量：** {metrics['actual_volume']:,} {volume_unit}")
             st.metric(label="目前最新報價", value=f"{currency_symbol}{round(metrics['current_price'], 2)}")
-            st.metric(label="📥 建議安全進場價(月線)", value=f"{currency_symbol}{round(metrics['safe_entry'], 2)}")
-            st.metric(label="🚨 建議果斷停損價(破月線)", value=f"{currency_symbol}{round(metrics['stop_loss'], 2)}")
+            st.metric(label="📥 建議短線進場價(10日線/5日低點)", value=f"{currency_symbol}{round(metrics['safe_entry'], 2)}")
+            st.metric(label="🚨 建議短線停損價(近10日低點)", value=f"{currency_symbol}{round(metrics['stop_loss'], 2)}")
             st.caption(f"🕒 最新同步時間: {get_tw_time()}")
 
         with col_ai:
