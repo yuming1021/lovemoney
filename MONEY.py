@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # 設定網頁版面為全螢幕寬度
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", page_title="AI 股票智慧系統", page_icon="📈")
 
 # ==========================================
 # 0. 網頁切換魔法 
@@ -75,7 +75,7 @@ with st.sidebar:
     st.write("---")
 
 # ==========================================
-# 模式 A：全市場自動監控推薦 (⭐ 5星評級版)
+# 模式 A：全市場自動監控推薦
 # ==========================================
 if st.session_state.app_mode == "🤖 全市場自動監控推薦":
     st.title("🌐 真實全市場 AI 自動掃描器")
@@ -83,9 +83,8 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
     with st.sidebar:
         st.subheader("📊 篩選嚴格度設定")
         min_volume = st.number_input("最低成交量門檻 (張)", min_value=1000, max_value=50000, value=3000, step=1000)
-        # 改為星級門檻
-        min_stars = st.slider("最低 AI 推薦星級", min_value=1, max_value=5, value=3)
-        refresh_rate = st.slider("重新掃描間隔 (秒)", min_value=10, max_value=120, value=15)
+        min_stars = st.slider("最低綜合技術星級", min_value=1, max_value=5, value=3)
+        refresh_rate = st.slider("重新掃描間隔 (秒)", min_value=15, max_value=120, value=15)
 
     if "latest_picks" not in st.session_state:
         st.session_state.latest_picks = pd.DataFrame()
@@ -97,7 +96,7 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
     while True:
         if not st.session_state.latest_picks.empty:
             with table_placeholder.container():
-                st.success(f"🎉 **AI 最新精選強勢標的：** (最後更新時間: {st.session_state.last_update_time})")
+                st.success(f"🎉 **最新精選強勢標的：** (最後更新時間: {st.session_state.last_update_time})")
                 st.dataframe(
                     st.session_state.latest_picks,
                     use_container_width=True,
@@ -105,7 +104,7 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
                     column_config={"深度分析": st.column_config.LinkColumn("🔍 深度分析", display_text="👉 點我分析")}
                 )
 
-        status_placeholder.info("⚡ 閃電引擎正在進行背景全市場打包下載，請稍候...")
+        status_placeholder.info("⚡ 雲端引擎正在進行背景全市場打包下載，請稍候...")
         active_pool = [s for s in all_market_stocks if s["volume_shares"] > (min_volume * 1000)]
         recommended_list = []
         
@@ -144,7 +143,7 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
                         bias_ratio = ((current_price - ma20) / ma20) * 100
                         latest_volume = int(today_vol / 1000)
                         
-                        # ⭐ 計算 AI 星級 (最高 5 星)
+                        # 計算純技術星級
                         star_count = 0
                         if current_price > ma20: star_count += 1
                         if ma20 > ma50: star_count += 1
@@ -153,19 +152,18 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
                         if 0 < bias_ratio < 8.0: star_count += 1
                             
                         if star_count >= min_stars:
-                            # 產出 AI 簡短預測
-                            if star_count >= 4: prediction = "🔥 飆股成型，極高機率發動波段"
-                            elif star_count == 3: prediction = "📈 趨勢轉強，預計挑戰前波高點"
-                            elif star_count == 2: prediction = "➖ 震盪打底，均線附近整理"
-                            else: prediction = "📉 格局偏弱，短線觀望為主"
+                            if star_count >= 4: prediction = "🔥 飆股成型"
+                            elif star_count == 3: prediction = "📈 趨勢轉強"
+                            elif star_count == 2: prediction = "➖ 震盪打底"
+                            else: prediction = "📉 格局偏弱"
 
                             recommended_list.append({
                                 "代號": stock["code"],
                                 "名稱": stock["name"],
                                 "當前現價": round(current_price, 2),
                                 "今日漲跌": f"{price_change:+.2f}%",
-                                "AI 推薦星評": "⭐" * star_count,
-                                "AI 走勢預測": prediction,
+                                "技術星評": "⭐" * star_count,
+                                "型態短評": prediction,
                                 "乖離率": f"{bias_ratio:+.2f}%",
                                 "深度分析": f"/?code={stock['code']}",
                                 "score_raw": star_count
@@ -179,7 +177,7 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
             st.session_state.last_update_time = time.strftime('%H:%M:%S')
             
             with table_placeholder.container():
-                st.success(f"🎉 **AI 最新精選強勢標的：** (最後更新時間: {st.session_state.last_update_time})")
+                st.success(f"🎉 **最新精選強勢標的：** (最後更新時間: {st.session_state.last_update_time})")
                 st.dataframe(
                     st.session_state.latest_picks,
                     use_container_width=True,
@@ -188,23 +186,23 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
                 )
         else:
             with table_placeholder.container():
-                st.warning("⚠️ 目前市場沒有符合條件的標的，AI 將持續監控。")
+                st.warning("⚠️ 目前市場沒有符合條件的標的，系統將持續監控。")
                 
-        status_placeholder.success("✅ 數據同步完成！AI 將在背景持續為您盯盤。")
+        status_placeholder.success(f"✅ 數據同步完成！準備進入下一次雲端運算。")
         time.sleep(refresh_rate)
         st.rerun()
 
 # ==========================================
-# 模式 B：個股自主搜尋分析 (⭐ 星級與詳細預測版)
+# 模式 B：個股自主搜尋分析
 # ==========================================
 elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
-    st.title("🔎 個股自主搜尋與 AI 預測分析")
+    st.title("🔎 個股自主搜尋與量價分析")
     
     with st.sidebar:
         st.subheader("🔄 個股即時盯盤設定")
         auto_refresh_search = st.checkbox("開啟個股無縫自動刷新", value=False)
         if auto_refresh_search:
-            search_refresh_rate = st.slider("個股刷新間隔 (秒)", min_value=10, max_value=60, value=15)
+            search_refresh_rate = st.slider("個股刷新間隔 (秒)", min_value=15, max_value=60, value=15)
     
     if all_market_stocks:
         search_options = [s["display_name"] for s in all_market_stocks]
@@ -222,7 +220,7 @@ elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
                 
         if selected_stock_info:
             st.write("---")
-            st.subheader(f"📊 【{selected_stock_info['code']} {selected_stock_info['name']}】 真實量價與 AI 綜合評鑑")
+            st.subheader(f"📊 【{selected_stock_info['code']} {selected_stock_info['name']}】 真實量價與綜合評鑑")
             
             chart_placeholder = st.empty()
             
@@ -239,7 +237,6 @@ elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
                         df_chart['Vol_MA5'] = df_chart['Volume'].rolling(window=5).mean()
                         df_chart['Volume_K'] = df_chart['Volume'] / 1000 
                         
-                        # 雙層圖表 (上K線、下成交量)
                         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
                         
                         fig.add_trace(go.Candlestick(
@@ -261,7 +258,6 @@ elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
                         fig.update_layout(xaxis_rangeslider_visible=False, height=550, margin=dict(l=10, r=10, t=10, b=10), hovermode='x unified')
                         st.plotly_chart(fig, use_container_width=True)
                         
-                        # --- 抓取最新數據計算 AI 星評 ---
                         current_price = df_chart['Close'].iloc[-1]
                         actual_volume = int(df_chart['Volume'].iloc[-1] / 1000) 
                         ma5 = df_chart['MA5'].iloc[-1]
@@ -273,7 +269,6 @@ elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
                         vol_ma5 = df_chart['Vol_MA5'].iloc[-1]
                         bias_ratio = ((current_price - ma20) / ma20) * 100
 
-                        # ⭐ 計算 AI 星評 (最高 5 星)
                         star_count = 0
                         if current_price > ma20: star_count += 1
                         if ma20 > ma50: star_count += 1
@@ -281,23 +276,20 @@ elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
                         if current_price > today_open and today_vol > vol_ma5: star_count += 1
                         if 0 < bias_ratio < 8.0: star_count += 1
                         
-                        # 產出 AI 未來預測
                         if star_count == 5:
-                            ai_pred = "🔥 **AI 走勢預測：極度看漲 (Strong Buy)**\n\n目前技術面完美，均線呈現強勢多頭排列且伴隨成交量放大，AI 預測短線極高機率發動大波段行情，建議積極偏多操作！"
+                            ai_pred = "🔥 **型態走勢：極度看漲 (Strong Buy)**\n\n目前技術面完美，均線呈現強勢多頭排列且伴隨成交量放大，預測短線將發動大波段行情。"
                         elif star_count == 4:
-                            ai_pred = "🚀 **AI 走勢預測：穩健看漲 (Buy)**\n\n趨勢已明顯轉強，長短天期均線皆給予支撐。AI 預測短期內將持續沿著 5 日線向上推升，準備挑戰前波高點。"
+                            ai_pred = "🚀 **型態走勢：穩健看漲 (Buy)**\n\n趨勢已明顯轉強，長短天期均線皆給予支撐。預期將沿著 5 日線向上推升。"
                         elif star_count == 3:
-                            ai_pred = "📈 **AI 走勢預測：溫和偏多 (Accumulate)**\n\n目前已站上關鍵支撐(月線)，但動能尚未完全爆發。AI 預測短期將以震盪走高的機率較大，可逢低少量佈局。"
+                            ai_pred = "📈 **型態走勢：溫和偏多 (Accumulate)**\n\n目前已站上關鍵支撐，但動能尚未完全爆發。預期短期將震盪走高，可逢低佈局。"
                         elif star_count == 2:
-                            ai_pred = "➖ **AI 走勢預測：中性盤整 (Hold)**\n\n目前多空勢均力敵，技術面正處於打底或區間震盪階段。AI 預測近期將在均線附近來回游走，建議靜待帶量突破方向再行動作。"
+                            ai_pred = "➖ **型態走勢：中性盤整 (Hold)**\n\n多空勢均力敵，技術面正處於區間震盪階段。建議靜待帶量突破方向再行動。"
                         elif star_count == 1:
-                            ai_pred = "📉 **AI 走勢預測：轉弱疑慮 (Underperform)**\n\n股價已跌破重要支撐，且均線開始下彎。AI 預測短線面臨較大回檔壓力，建議先退場觀望，不要輕易摸底。"
+                            ai_pred = "📉 **型態走勢：轉弱疑慮 (Underperform)**\n\n股價已跌破重要支撐，且均線開始下彎。短線面臨回檔壓力，建議退場觀望。"
                         else:
-                            ai_pred = "🚨 **AI 走勢預測：極度弱勢 (Strong Sell)**\n\n空頭格局已完全成型，K線與成交量皆顯示賣壓沉重。AI 預測極有可能持續向下探底，請嚴格避開或執行停損！"
+                            ai_pred = "🚨 **型態走勢：極度弱勢 (Strong Sell)**\n\n空頭格局完全成型，K線與成交量顯示賣壓沉重。極有可能持續向下探底，請避開！"
 
-                        # 畫面呈現 (結合數據與 AI 預測)
                         col_data, col_ai = st.columns([1, 1])
-                        
                         with col_data:
                             st.write("### 🗃️ 盤中真實數據面板")
                             st.info(f"**📈 實際總成交量：** {actual_volume:,} 張")
@@ -306,17 +298,12 @@ elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
                             st.metric(label="🚨 建議果斷停損價(破月線)", value=f"${round(ma20 * 0.95, 2)}")
 
                         with col_ai:
-                            st.write("### 🤖 AI 綜合技術評鑑")
+                            st.write("### 📐 綜合技術評鑑")
                             st.subheader(f"推薦星評：{'⭐' * star_count if star_count > 0 else '💀 (0星)'}")
-                            
-                            if star_count >= 4:
-                                st.success(ai_pred)
-                            elif star_count == 3:
-                                st.info(ai_pred)
-                            elif star_count == 2:
-                                st.warning(ai_pred)
-                            else:
-                                st.error(ai_pred)
+                            if star_count >= 4: st.success(ai_pred)
+                            elif star_count == 3: st.info(ai_pred)
+                            elif star_count == 2: st.warning(ai_pred)
+                            else: st.error(ai_pred)
                                 
                     else:
                         st.error("此標的目前無足夠歷史交易數據可供分析。")
