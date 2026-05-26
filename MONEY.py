@@ -269,7 +269,7 @@ def render_single_stock_analysis(selected_stock_info):
     st.write("---")
     st.subheader(
         f"📊 【{selected_stock_info['code']} {selected_stock_info['name']}】 "
-        f"真實量價與綜合評鑑"
+        f"量價與綜合評鑑"
     )
 
     try:
@@ -349,7 +349,7 @@ def render_single_stock_analysis(selected_stock_info):
         col_data, col_ai = st.columns([1, 1])
 
         with col_data:
-            st.write("### 🗃️ 盤中真實數據面板")
+            st.write("### 🗃️ 盤中真實數據")
             st.info(f"**📈 實際總成交量：** {metrics['actual_volume']:,} 張")
             st.metric(label="目前最新報價", value=f"${round(metrics['current_price'], 2)}")
             st.metric(label="📥 建議安全進場價(月線)", value=f"${round(metrics['safe_entry'], 2)}")
@@ -538,7 +538,7 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
 # 模式 B：個股自主搜尋分析
 # ==========================================
 elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
-    st.title("🔎 個股自主搜尋與量價分析")
+    st.title("🔎 個股搜尋與量價分析")
 
     with st.sidebar:
         st.subheader("🔄 個股即時盯盤設定")
