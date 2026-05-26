@@ -463,8 +463,8 @@ with st.sidebar:
 # ==========================================
 # 模式 A：全市場自動監控推薦
 # ==========================================
-if st.session_state.app_mode == "🤖 全市場自動監控推薦":
-    st.title("🌐 真實全市場 AI 自動掃描器")
+if st.session_state.app_mode == "🤖 市場 AI 推薦":
+    st.title("🌐 市場 AI 推薦")
 
     market_open, market_msg = is_tw_market_open()
 
@@ -537,7 +537,7 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
 # ==========================================
 # 模式 B：個股自主搜尋分析
 # ==========================================
-elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
+elif st.session_state.app_mode == "🔍 個股搜尋分析":
     st.title("🔎 個股搜尋與量價分析")
 
     with st.sidebar:
