@@ -65,18 +65,18 @@ def browser_auto_refresh(seconds, key):
 # 0. 網頁切換：支援 /?code=2330 深度分析跳轉
 # ==========================================
 MODE_OPTIONS = [
-    "🤖 全市場自動監控推薦",
-    "🔍 個股自主搜尋分析",
+    "🤖 市場 AI 推薦",
+    "🔍 個股搜尋分析",
 ]
 
 if "app_mode" not in st.session_state or st.session_state.app_mode not in MODE_OPTIONS:
-    st.session_state.app_mode = "🤖 全市場自動監控推薦"
+    st.session_state.app_mode = "🤖 市場 AI 推薦"
 
 query_params = st.query_params
 url_code = query_params.get("code")
 
 if url_code:
-    st.session_state.app_mode = "🔍 個股自主搜尋分析"
+    st.session_state.app_mode = "🔍 個股搜尋分析"
     st.session_state.jump_to_code = str(url_code)
     st.query_params.clear()
     st.rerun()
