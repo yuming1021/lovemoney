@@ -65,18 +65,20 @@ def browser_auto_refresh(seconds, key):
 # 0. 網頁切換：支援 /?code=2330 深度分析跳轉
 # ==========================================
 MODE_OPTIONS = [
-    "🤖 市場 AI 推薦",
-    "🔍 個股搜尋分析",
+    "🤖 全市場自動監控推薦",
+    "🔍 台股自主搜尋分析",
+    "🇺🇸 美股自主搜尋分析",
 ]
 
 if "app_mode" not in st.session_state or st.session_state.app_mode not in MODE_OPTIONS:
-    st.session_state.app_mode = "🤖 市場 AI 推薦"
+    st.session_state.app_mode = "🤖 全市場自動監控推薦"
 
 query_params = st.query_params
 url_code = query_params.get("code")
 
 if url_code:
-    st.session_state.app_mode = "🔍 個股搜尋分析"
+    # 支援原本全市場推薦表格的 /?code=2330 深度分析跳轉
+    st.session_state.app_mode = "🔍 台股自主搜尋分析"
     st.session_state.jump_to_code = str(url_code)
     st.query_params.clear()
     st.rerun()
@@ -190,7 +192,7 @@ def get_ai_prediction_text(star_count):
 
 
 def prepare_chart_data(df_raw):
-    """補上均線、量均線與成交量張數。"""
+    """補上均線與量均線。"""
     if df_raw is None or df_raw.empty:
         return pd.DataFrame()
 
@@ -209,8 +211,12 @@ def prepare_chart_data(df_raw):
     return df
 
 
-def calc_stock_metrics(df_chart):
-    """依照你原本的邏輯計算星評、月線進場價、停損價。"""
+def calc_stock_metrics(df_chart, volume_divisor=1000):
+    """依照你原本的邏輯計算星評、月線進場價、停損價。
+
+    台股成交量通常換算成「張」，所以 volume_divisor=1000。
+    美股成交量通常顯示為「股」，所以 volume_divisor=1。
+    """
     if df_chart is None or df_chart.empty or len(df_chart) < 50:
         return None
 
@@ -229,7 +235,7 @@ def calc_stock_metrics(df_chart):
 
     price_change = ((current_price - today_open) / today_open) * 100
     bias_ratio = ((current_price - ma20) / ma20) * 100
-    actual_volume = int(today_vol / 1000)
+    actual_volume = int(today_vol / volume_divisor)
 
     star_count = 0
     if current_price > ma20:
@@ -265,11 +271,18 @@ def calc_stock_metrics(df_chart):
 # ==========================================
 # 共用個股分析畫面：原本分析功能保留
 # ==========================================
-def render_single_stock_analysis(selected_stock_info):
+def render_single_stock_analysis(
+    selected_stock_info,
+    *,
+    volume_unit="張",
+    volume_divisor=1000,
+    currency_symbol="$",
+    title_suffix="真實量價與綜合評鑑",
+):
     st.write("---")
     st.subheader(
         f"📊 【{selected_stock_info['code']} {selected_stock_info['name']}】 "
-        f"量價與綜合評鑑"
+        f"{title_suffix}"
     )
 
     try:
@@ -327,7 +340,7 @@ def render_single_stock_analysis(selected_stock_info):
             for _, row in df_chart.iterrows()
         ]
         fig.add_trace(
-            go.Bar(x=df_chart.index, y=df_chart["Volume_K"], marker_color=vol_colors, name="實際成交量(張)"),
+            go.Bar(x=df_chart.index, y=df_chart["Volume"] / volume_divisor, marker_color=vol_colors, name=f"實際成交量({volume_unit})"),
             row=2,
             col=1
         )
@@ -341,7 +354,7 @@ def render_single_stock_analysis(selected_stock_info):
 
         st.plotly_chart(fig, use_container_width=True)
 
-        metrics = calc_stock_metrics(df_chart)
+        metrics = calc_stock_metrics(df_chart, volume_divisor=volume_divisor)
         if metrics is None:
             st.error("此標的資料不足，無法計算技術評鑑。")
             return
@@ -349,11 +362,11 @@ def render_single_stock_analysis(selected_stock_info):
         col_data, col_ai = st.columns([1, 1])
 
         with col_data:
-            st.write("### 🗃️ 盤中真實數據")
-            st.info(f"**📈 實際總成交量：** {metrics['actual_volume']:,} 張")
-            st.metric(label="目前最新報價", value=f"${round(metrics['current_price'], 2)}")
-            st.metric(label="📥 建議安全進場價(月線)", value=f"${round(metrics['safe_entry'], 2)}")
-            st.metric(label="🚨 建議果斷停損價(破月線)", value=f"${round(metrics['stop_loss'], 2)}")
+            st.write("### 🗃️ 盤中真實數據面板")
+            st.info(f"**📈 實際總成交量：** {metrics['actual_volume']:,} {volume_unit}")
+            st.metric(label="目前最新報價", value=f"{currency_symbol}{round(metrics['current_price'], 2)}")
+            st.metric(label="📥 建議安全進場價(月線)", value=f"{currency_symbol}{round(metrics['safe_entry'], 2)}")
+            st.metric(label="🚨 建議果斷停損價(破月線)", value=f"{currency_symbol}{round(metrics['stop_loss'], 2)}")
             st.caption(f"🕒 最新同步時間: {get_tw_time()}")
 
         with col_ai:
@@ -448,6 +461,49 @@ def scan_whole_market(min_volume, min_stars):
 
 
 # ==========================================
+# 美股自主搜尋設定
+# ==========================================
+POPULAR_US_STOCKS = [
+    {"code": "AAPL", "name": "Apple", "yahoo_symbol": "AAPL", "display_name": "AAPL Apple"},
+    {"code": "MSFT", "name": "Microsoft", "yahoo_symbol": "MSFT", "display_name": "MSFT Microsoft"},
+    {"code": "NVDA", "name": "NVIDIA", "yahoo_symbol": "NVDA", "display_name": "NVDA NVIDIA"},
+    {"code": "TSLA", "name": "Tesla", "yahoo_symbol": "TSLA", "display_name": "TSLA Tesla"},
+    {"code": "AMD", "name": "Advanced Micro Devices", "yahoo_symbol": "AMD", "display_name": "AMD Advanced Micro Devices"},
+    {"code": "AMZN", "name": "Amazon", "yahoo_symbol": "AMZN", "display_name": "AMZN Amazon"},
+    {"code": "GOOGL", "name": "Alphabet Class A", "yahoo_symbol": "GOOGL", "display_name": "GOOGL Alphabet Class A"},
+    {"code": "META", "name": "Meta Platforms", "yahoo_symbol": "META", "display_name": "META Meta Platforms"},
+    {"code": "PLTR", "name": "Palantir", "yahoo_symbol": "PLTR", "display_name": "PLTR Palantir"},
+    {"code": "ARM", "name": "Arm Holdings", "yahoo_symbol": "ARM", "display_name": "ARM Arm Holdings"},
+    {"code": "CEG", "name": "Constellation Energy", "yahoo_symbol": "CEG", "display_name": "CEG Constellation Energy"},
+    {"code": "PANW", "name": "Palo Alto Networks", "yahoo_symbol": "PANW", "display_name": "PANW Palo Alto Networks"},
+    {"code": "SPY", "name": "S&P 500 ETF", "yahoo_symbol": "SPY", "display_name": "SPY S&P 500 ETF"},
+    {"code": "QQQ", "name": "Nasdaq 100 ETF", "yahoo_symbol": "QQQ", "display_name": "QQQ Nasdaq 100 ETF"},
+    {"code": "VOO", "name": "Vanguard S&P 500 ETF", "yahoo_symbol": "VOO", "display_name": "VOO Vanguard S&P 500 ETF"},
+]
+
+
+def normalize_us_symbol(symbol):
+    return str(symbol).strip().upper().replace(" ", "")
+
+
+def build_us_stock_info(symbol):
+    symbol = normalize_us_symbol(symbol)
+    if not symbol:
+        return None
+
+    matched = next((s for s in POPULAR_US_STOCKS if s["code"] == symbol), None)
+    if matched:
+        return matched
+
+    return {
+        "code": symbol,
+        "name": symbol,
+        "yahoo_symbol": symbol,
+        "display_name": symbol,
+    }
+
+
+# ==========================================
 # 側邊欄多功能導航選單
 # ==========================================
 with st.sidebar:
@@ -463,8 +519,8 @@ with st.sidebar:
 # ==========================================
 # 模式 A：全市場自動監控推薦
 # ==========================================
-if st.session_state.app_mode == "🤖 市場 AI 推薦":
-    st.title("🌐 市場 AI 推薦")
+if st.session_state.app_mode == "🤖 全市場自動監控推薦":
+    st.title("🌐 真實全市場 AI 自動掃描器")
 
     market_open, market_msg = is_tw_market_open()
 
@@ -499,12 +555,12 @@ if st.session_state.app_mode == "🤖 市場 AI 推薦":
         status_placeholder.warning(
             f"⏸️ {market_msg}\n\n"
             "全市場自動監控只在台股一般盤中時間提供；"
-            "你仍然可以切到左側「🔍 個股自主搜尋分析」繼續搜尋與查看原本分析。"
+            "你仍然可以切到左側「🔍 台股自主搜尋分析」或「🇺🇸 美股自主搜尋分析」繼續搜尋與查看原本分析。"
         )
         with table_placeholder.container():
             st.info(
                 "非盤中時間不執行全市場自動掃描，避免 Streamlit Cloud 一直重跑或手機卡住。\n\n"
-                "請使用左側「🔍 個股自主搜尋分析」繼續搜尋個股與查看 K 線分析。"
+                "請使用左側「🔍 台股自主搜尋分析」或「🇺🇸 美股自主搜尋分析」繼續搜尋個股與查看 K 線分析。"
             )
     else:
         status_placeholder.info("⚡ 雲端引擎正在同步最新盤中資料...")
@@ -535,18 +591,18 @@ if st.session_state.app_mode == "🤖 市場 AI 推薦":
 
 
 # ==========================================
-# 模式 B：個股自主搜尋分析
+# 模式 B：台股自主搜尋分析
 # ==========================================
-elif st.session_state.app_mode == "🔍 個股搜尋分析":
-    st.title("🔎 個股搜尋與量價分析")
+elif st.session_state.app_mode == "🔍 台股自主搜尋分析":
+    st.title("🔎 台股自主搜尋與量價分析")
 
     with st.sidebar:
-        st.subheader("🔄 個股即時盯盤設定")
-        auto_refresh_search = st.checkbox("開啟個股無縫自動刷新", value=False)
+        st.subheader("🔄 台股即時盯盤設定")
+        auto_refresh_search = st.checkbox("開啟台股無縫自動刷新", value=False)
 
         if auto_refresh_search:
             search_refresh_rate = st.slider(
-                "個股刷新間隔 (秒)",
+                "台股刷新間隔 (秒)",
                 min_value=15,
                 max_value=60,
                 value=30
@@ -564,7 +620,7 @@ elif st.session_state.app_mode == "🔍 個股搜尋分析":
             st.session_state.jump_to_code = None
 
         user_select = st.selectbox(
-            "👉 請選擇或輸入您想查詢的標的 (支援搜尋 ETF)：",
+            "👉 請選擇或輸入您想查詢的台股標的 (支援搜尋 ETF)：",
             search_options,
             index=default_idx
         )
@@ -575,15 +631,92 @@ elif st.session_state.app_mode == "🔍 個股搜尋分析":
         )
 
         if selected_stock_info:
-            render_single_stock_analysis(selected_stock_info)
+            render_single_stock_analysis(
+                selected_stock_info,
+                volume_unit="張",
+                volume_divisor=1000,
+                currency_symbol="$",
+                title_suffix="台股真實量價與綜合評鑑",
+            )
 
             if auto_refresh_search:
                 st.info(
                     f"⏱️ 系統將在 {search_refresh_rate} 秒後自動為您更新 "
                     f"{selected_stock_info['name']} 的真實報價與成交量..."
                 )
-                browser_auto_refresh(search_refresh_rate, key="search_auto_refresh")
+                browser_auto_refresh(search_refresh_rate, key="tw_search_auto_refresh")
             else:
-                st.caption("⏸️ 自動刷新已暫停。勾選左側「開啟個股無縫自動刷新」即可啟動即時盯盤。")
+                st.caption("⏸️ 自動刷新已暫停。勾選左側「開啟台股無縫自動刷新」即可啟動即時盯盤。")
     else:
-        st.error("目前無法取得市場清單，請稍後再試。")
+        st.error("目前無法取得台股市場清單，請稍後再試。")
+
+
+# ==========================================
+# 模式 C：美股自主搜尋分析
+# ==========================================
+elif st.session_state.app_mode == "🇺🇸 美股自主搜尋分析":
+    st.title("🇺🇸 美股自主搜尋與量價分析")
+
+    with st.sidebar:
+        st.subheader("🔄 美股即時盯盤設定")
+        auto_refresh_us = st.checkbox("開啟美股無縫自動刷新", value=False)
+
+        if auto_refresh_us:
+            us_refresh_rate = st.slider(
+                "美股刷新間隔 (秒)",
+                min_value=15,
+                max_value=60,
+                value=30
+            )
+
+    st.info(
+        "這個頁面是獨立的美股搜尋頁，不會影響台股全市場掃描。"
+        "請輸入 Yahoo Finance 可查詢的美股代號，例如 AAPL、TSLA、NVDA、MSFT、AMD、PLTR、SPY、QQQ。"
+    )
+
+    popular_options = [s["display_name"] for s in POPULAR_US_STOCKS]
+    input_mode = st.radio(
+        "選擇查詢方式：",
+        ["從常用清單選擇", "手動輸入美股代號"],
+        horizontal=True
+    )
+
+    selected_us_info = None
+
+    if input_mode == "從常用清單選擇":
+        user_select_us = st.selectbox(
+            "👉 請選擇常用美股 / ETF：",
+            popular_options,
+            index=0
+        )
+        selected_us_info = next(
+            (s for s in POPULAR_US_STOCKS if s["display_name"] == user_select_us),
+            None
+        )
+    else:
+        manual_symbol = st.text_input(
+            "👉 請輸入美股代號：",
+            value="NVDA",
+            placeholder="例如：AAPL、TSLA、NVDA、MSFT、QQQ"
+        )
+        selected_us_info = build_us_stock_info(manual_symbol)
+
+    if selected_us_info:
+        render_single_stock_analysis(
+            selected_us_info,
+            volume_unit="股",
+            volume_divisor=1,
+            currency_symbol="US$",
+            title_suffix="美股真實量價與綜合評鑑",
+        )
+
+        if auto_refresh_us:
+            st.info(
+                f"⏱️ 系統將在 {us_refresh_rate} 秒後自動為您更新 "
+                f"{selected_us_info['code']} 的真實報價與成交量..."
+            )
+            browser_auto_refresh(us_refresh_rate, key="us_search_auto_refresh")
+        else:
+            st.caption("⏸️ 自動刷新已暫停。勾選左側「開啟美股無縫自動刷新」即可啟動即時盯盤。")
+else:
+    st.error("功能模式不存在，請重新整理頁面。")
