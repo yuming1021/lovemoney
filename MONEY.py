@@ -30,12 +30,20 @@ TZ_TW = timezone(timedelta(hours=8))
 def get_tw_time_text(): return datetime.now(TZ_TW).strftime("%Y-%m-%d %H:%M:%S")
 
 # =========================================================
-# YFinance 資料清洗機制
+# 記憶體鎖定 (防止刷新跳回台積電)
+# =========================================================
+if "app_mode" not in st.session_state: st.session_state.app_mode = "🤖 全市場自動監控推薦"
+if "tw_search" not in st.session_state: st.session_state.tw_search = "2330"
+if "us_search" not in st.session_state: st.session_state.us_search = "NVDA"
+
+# =========================================================
+# YFinance 資料清洗機制 (開啟自動還原權值)
 # =========================================================
 @st.cache_data(ttl=15, show_spinner=False)
 def safe_history(symbol, period="6mo"):
     try:
-        df = yf.Ticker(symbol).history(period=period, auto_adjust=False)
+        # 💡 修復股價斷層：移除 auto_adjust=False，讓系統自動還原除權息
+        df = yf.Ticker(symbol).history(period=period)
         if df.empty: return df
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -122,12 +130,17 @@ def get_long_prediction(stars):
 
 def calc_metrics(df, volume_divisor):
     if df is None or len(df) < 20: return None
+    
+    # 💡 確保抓取到正確的「今收」與「昨收」
     latest = df.iloc[-1]
     prev_day = df.iloc[-2]
     
     try:
-        current_price, today_open, today_vol = float(latest["Close"]), float(latest["Open"]), float(latest["Volume"])
+        current_price = float(latest["Close"])
+        today_open = float(latest["Open"])
+        today_vol = float(latest["Volume"])
         prev_close = float(prev_day["Close"])
+        
         ma5, ma10, ma20, ma50 = float(latest["MA5"]), float(latest["MA10"]), float(latest["MA20"]), float(latest["MA50"])
         vol_ma5, low5, low10 = float(latest["Vol_MA5"]), float(latest["Low5"]), float(latest["Low10"])
         atr14 = float(latest["ATR14"]) if not pd.isna(latest["ATR14"]) else (current_price * 0.02)
@@ -135,6 +148,7 @@ def calc_metrics(df, volume_divisor):
 
     if any(pd.isna(x) for x in [current_price, prev_close, ma20]) or ma20 == 0 or prev_close == 0: return None
 
+    # 💡 完美的漲跌幅公式：(最新價 - 昨收價) / 昨收價
     price_change = ((current_price - prev_close) / prev_close) * 100
     bias_ratio = ((current_price - ma20) / ma20) * 100
 
@@ -173,19 +187,10 @@ def draw_stock_chart(df, volume_unit, volume_divisor):
     fig.update_layout(xaxis_rangeslider_visible=False, height=550, margin=dict(l=10, r=10, t=10, b=10), hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
 
-def render_analysis(stock_info, volume_unit, volume_divisor, currency, candidates=None):
+def render_analysis(stock_info, volume_unit, volume_divisor, currency):
     st.subheader(f"📊 【{stock_info['name']}】量價與 AI 預測")
     
-    raw = pd.DataFrame()
-    if candidates:
-        for sym in candidates:
-            temp_df = safe_history(sym)
-            if not temp_df.empty and len(temp_df) >= 20:
-                raw = temp_df
-                break
-    else:
-        raw = safe_history(stock_info["yahoo_symbol"])
-
+    raw = safe_history(stock_info["yahoo_symbol"])
     df = prepare_indicators(raw)
     metrics = calc_metrics(df, volume_divisor)
     
@@ -195,6 +200,9 @@ def render_analysis(stock_info, volume_unit, volume_divisor, currency, candidate
 
     draw_stock_chart(df, volume_unit, volume_divisor)
     
+    # 💡 加入延遲提示，避免使用者誤會
+    st.caption("⚠️ *註：使用 Yahoo Finance 資料源，台股盤中報價可能延遲 15~20 分鐘。*")
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("目前最新報價", f"{currency}{metrics['current_price']:.2f}", f"{metrics['price_change']:+.2f}%")
     c2.metric("🎯 AI 預測目標價", f"{currency}{metrics['target_price']:.2f}")
@@ -227,7 +235,7 @@ def scan_tw_market(min_volume_lots, min_stars, batch_size=80):
         batch = active_pool[start_idx:start_idx + batch_size]
         symbols = [s["yahoo_symbol"] for s in batch]
         
-        try: bulk = yf.download(symbols, period="3mo", group_by="ticker", progress=False, auto_adjust=False, threads=True, timeout=15)
+        try: bulk = yf.download(symbols, period="3mo", group_by="ticker", progress=False, threads=True, timeout=15)
         except: bulk = pd.DataFrame()
 
         for stock in batch:
@@ -254,13 +262,10 @@ def scan_tw_market(min_volume_lots, min_stars, batch_size=80):
 # 側邊欄與頁面導航
 # =========================================================
 mode_options = ["🤖 全市場自動監控推薦", "🔍 個股自主搜尋分析", "🇺🇸 美股自主搜尋分析"]
-if "app_mode" not in st.session_state: 
-    st.session_state.app_mode = mode_options[0]
 
 with st.sidebar:
     st.header("👑 AI 股票智慧系統")
 
-    # 💡 完美修復：按鈕強制清除快取，且不會重置導航
     if st.button("🔄 立即強制全面刷新", type="primary", use_container_width=True):
         get_tw_market_symbols.clear()
         safe_history.clear()
@@ -268,7 +273,6 @@ with st.sidebar:
         
     st.write("---")
     
-    # 💡 完美修復：利用 index 鎖住目前的選單位置
     current_index = mode_options.index(st.session_state.app_mode) if st.session_state.app_mode in mode_options else 0
     st.session_state.app_mode = st.radio("請選擇功能模式：", mode_options, index=current_index)
     st.write("---")
@@ -297,7 +301,7 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
         st.dataframe(picks, use_container_width=True, hide_index=True)
 
 # =========================================================
-# 模式 B: 台股搜尋
+# 模式 B: 台股搜尋 (記憶鎖定版)
 # =========================================================
 elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
     st.title("🔍 台股自主搜尋與量價分析")
@@ -309,18 +313,24 @@ elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
             tw_refresh = st.slider("刷新秒數", 15, 120, 30, step=5)
             st_autorefresh(interval=tw_refresh * 1000, key="tw_auto")
     
-    user_input = st.text_input("👉 請輸入台股代號 (如 2330, 00929) 或中文名稱：", value="2330").strip()
+    # 💡 關鍵修復：這裡加上了捕捉新輸入，並存入 session_state
+    new_tw_input = st.text_input("👉 請輸入台股代號 (如 2330, 00929) 或中文名稱：", value=st.session_state.tw_search).strip()
+    if new_tw_input != st.session_state.tw_search:
+        st.session_state.tw_search = new_tw_input
+        st.rerun() # 記住後重整，保證不跑票
+    
+    user_input = st.session_state.tw_search
     
     if user_input:
         stock_info = None
-        candidates = []
         
         if user_input.isdigit():
             stock_info = {"code": user_input, "name": user_input, "yahoo_symbol": f"{user_input}.TW"}
-            candidates = [f"{user_input}.TW", f"{user_input}.TWO"]
+            # 輔助找中文名稱
             for s in TW_STOCKS:
                 if s["code"] == user_input:
                     stock_info["name"] = s["name"]
+                    stock_info["yahoo_symbol"] = s["yahoo_symbol"] # 自動判斷上市上櫃
                     break
         else:
             for s in TW_STOCKS:
@@ -330,12 +340,12 @@ elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
 
         if stock_info:
             st.caption(f"🕒 資料最後更新時間：{get_tw_time_text()}")
-            render_analysis(stock_info, "張", 1000, "NT$", candidates=candidates)
+            render_analysis(stock_info, "張", 1000, "NT$")
         else:
-            st.warning(f"找不到名稱包含「{user_input}」的股票，請嘗試輸入代號。")
+            st.warning(f"找不到名稱包含「{user_input}」的股票，請嘗試直接輸入代號。")
 
 # =========================================================
-# 模式 C: 美股搜尋
+# 模式 C: 美股搜尋 (記憶鎖定版)
 # =========================================================
 elif st.session_state.app_mode == "🇺🇸 美股自主搜尋分析":
     st.title("🇺🇸 美股自主搜尋與量價分析")
@@ -347,7 +357,13 @@ elif st.session_state.app_mode == "🇺🇸 美股自主搜尋分析":
             us_refresh = st.slider("刷新秒數", 15, 120, 30, step=5)
             st_autorefresh(interval=us_refresh * 1000, key="us_auto")
 
-    us_input = st.text_input("👉 輸入美股 / ETF 代號 (例如 NVDA, TSLA, QQQ)：", "NVDA").strip().upper()
+    # 💡 同樣的記憶體鎖定機制
+    new_us_input = st.text_input("👉 輸入美股 / ETF 代號 (例如 NVDA, TSLA, QQQ)：", value=st.session_state.us_search).strip().upper()
+    if new_us_input != st.session_state.us_search:
+        st.session_state.us_search = new_us_input
+        st.rerun()
+
+    us_input = st.session_state.us_search
     
     if us_input:
         stock_info = {"code": us_input, "name": us_input, "yahoo_symbol": us_input}
