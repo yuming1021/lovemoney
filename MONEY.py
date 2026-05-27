@@ -22,7 +22,7 @@ TZ_TW = timezone(timedelta(hours=8))
 def get_tw_time_text(): return datetime.now(TZ_TW).strftime("%Y-%m-%d %H:%M:%S")
 
 # =========================================================
-# 萬無一失的 YFinance 資料清洗機制 (修復當機的核心)
+# YFinance 資料清洗機制 (防當機核心)
 # =========================================================
 def safe_history(symbol, period="6mo"):
     try:
@@ -59,7 +59,7 @@ def get_tw_market_symbols():
     tpex_url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
     
     stocks = []
-    # 抓上市
+    # 上市
     try:
         res = requests.get(twse_url, headers=headers, timeout=15)
         if res.status_code == 200:
@@ -70,7 +70,7 @@ def get_tw_market_symbols():
                     stocks.append({"code": code, "name": item.get("Name", "").strip(), "yahoo_symbol": f"{code}.TW", "display_name": f"{code} {item.get('Name', '').strip()}", "volume_shares": int(vol) if vol.isdigit() else 0, "market": "上市"})
     except: pass
 
-    # 抓上櫃
+    # 上櫃
     try:
         res = requests.get(tpex_url, headers=headers, timeout=15)
         if res.status_code == 200:
@@ -105,189 +105,10 @@ def prepare_indicators(df):
     df["ATR14"] = df["TR"].rolling(14).mean()
     return df
 
-def calc_metrics(df, volume_divisor):
-    if df is None or len(df) < 20: return None
-    latest = df.iloc[-1]
-    
-    try:
-        current_price, today_open, today_vol = float(latest["Close"]), float(latest["Open"]), float(latest["Volume"])
-        ma5, ma10, ma20, ma50 = float(latest["MA5"]), float(latest["MA10"]), float(latest["MA20"]), float(latest["MA50"])
-        vol_ma5, low5, low10 = float(latest["Vol_MA5"]), float(latest["Low5"]), float(latest["Low10"])
-        atr14 = float(latest["ATR14"]) if not pd.isna(latest["ATR14"]) else (current_price * 0.02)
-    except: return None
-
-    if any(pd.isna(x) for x in [current_price, today_open, ma20]) or ma20 == 0: return None
-
-    price_change = ((current_price - today_open) / today_open) * 100
-    bias_ratio = ((current_price - ma20) / ma20) * 100
-
-    stars = sum([current_price > ma20, ma20 > ma50, ma5 > ma10, (current_price > today_open and today_vol > vol_ma5), (0 < bias_ratio < 8)])
-
-    entry_price = max(ma10, low5) * 0.995
-    stop_loss = low10 * 0.985
-    
-    if stars >= 4: target_price = current_price + (atr14 * 2.5)
-    elif stars == 3: target_price = current_price + (atr14 * 1.5)
-    elif stars == 2: target_price = current_price + (atr14 * 0.8)
-    else: target_price = ma20 
-
-    preds = {0:"🚨 弱勢", 1:"📉 轉弱", 2:"➖ 盤整", 3:"📈 偏多", 4:"🚀 穩健", 5:"🔥 飆股"}
-    
-    return {
-        "current_price": current_price, "actual_volume": int(today_vol / volume_divisor),
-        "price_change": price_change, "bias_ratio": bias_ratio, "stars": stars,
-        "entry_price": entry_price, "stop_loss": stop_loss, "target_price": target_price,
-        "short_prediction": preds.get(stars, "➖ 盤整")
-    }
-
-# =========================================================
-# UI 與繪圖
-# =========================================================
-def draw_stock_chart(df, volume_unit, volume_divisor):
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
-    fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="日K線", increasing_line_color="red", increasing_fillcolor="red", decreasing_line_color="green", decreasing_fillcolor="green"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["MA5"], mode="lines", name="5日線", line=dict(color="pink", width=1.4)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["MA10"], mode="lines", name="10日線", line=dict(color="cyan", width=1.4)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["MA20"], mode="lines", name="20日線", line=dict(color="orange", width=1.8)), row=1, col=1)
-    
-    colors = ["red" if c >= o else "green" for c, o in zip(df["Close"], df["Open"])]
-    fig.add_trace(go.Bar(x=df.index, y=df["Volume"] / volume_divisor, name=f"成交量({volume_unit})", marker_color=colors), row=2, col=1)
-    fig.update_layout(xaxis_rangeslider_visible=False, height=550, margin=dict(l=10, r=10, t=10, b=10), hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True)
-
-def render_analysis(stock_info, volume_unit, volume_divisor, currency):
-    st.subheader(f"📊 【{stock_info['code']} {stock_info['name']}】量價與 AI 預測")
-    
-    raw = safe_history(stock_info["yahoo_symbol"])
-    df = prepare_indicators(raw)
-    metrics = calc_metrics(df, volume_divisor)
-    
-    if metrics is None:
-        st.error("此標的目前無足夠歷史交易數據可供分析。")
-        return
-
-    draw_stock_chart(df, volume_unit, volume_divisor)
-    
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("目前最新報價", f"{currency}{metrics['current_price']:.2f}", f"{metrics['price_change']:+.2f}%")
-    c2.metric("🎯 AI 預測目標價", f"{currency}{metrics['target_price']:.2f}")
-    c3.metric("📥 建議進場價", f"{currency}{metrics['entry_price']:.2f}")
-    c4.metric("🚨 建議停損價", f"{currency}{metrics['stop_loss']:.2f}")
-
-    c_left, c_right = st.columns([1, 1])
-    c_left.info(f"**📈 今日總成交量：** {metrics['actual_volume']:,} {volume_unit}")
-    c_right.success(f"**🤖 綜合技術星評：** {'⭐' * metrics['stars'] if metrics['stars'] > 0 else '💀 0星'} ({metrics['short_prediction']})")
-
-# =========================================================
-# 全市場掃描核心邏輯
-# =========================================================
-def scan_tw_market(min_volume_lots, min_stars, batch_size=80):
-    active_pool = [s for s in TW_STOCKS if s.get("volume_shares", 0) >= min_volume_lots * 1000]
-    active_pool = sorted(active_pool, key=lambda x: x.get("volume_shares", 0), reverse=True)
-    
-    if not active_pool: return pd.DataFrame()
-    
-    result = []
-    progress = st.progress(0, text=f"準備掃描 {len(active_pool)} 檔活躍股票...")
-
-    for start_idx in range(0, len(active_pool), batch_size):
-        batch = active_pool[start_idx:start_idx + batch_size]
-        symbols = [s["yahoo_symbol"] for s in batch]
-        
-        try: bulk = yf.download(symbols, period="3mo", group_by="ticker", progress=False, auto_adjust=False, threads=True, timeout=15)
-        except: bulk = pd.DataFrame()
-
-        for stock in batch:
-            raw = extract_single_from_bulk(bulk, stock["yahoo_symbol"])
-            df = prepare_indicators(raw)
-            metrics = calc_metrics(df, volume_divisor=1000)
-            
-            if metrics and metrics["stars"] >= min_stars:
-                result.append({
-                    "市場": stock.get("market", ""), "代號": stock["code"], "名稱": stock["name"],
-                    "當前現價": round(metrics["current_price"], 2), "今日漲跌": f"{metrics['price_change']:+.2f}%",
-                    "成交量(張)": metrics['actual_volume'], "🎯 目標價": round(metrics["target_price"], 2),
-                    "技術星評": "⭐" * metrics["stars"], "型態短評": metrics["short_prediction"],
-                    "乖離率": f"{metrics['bias_ratio']:+.2f}%", "score": metrics["stars"],
-                })
-
-        progress.progress(min((start_idx + len(batch)) / len(active_pool), 1.0))
-    progress.empty()
-    
-    if result: return pd.DataFrame(result).sort_values(["score", "成交量(張)"], ascending=False).drop(columns=["score"])
-    return pd.DataFrame()
-
-# =========================================================
-# 側邊欄與頁面導航
-# =========================================================
-if "app_mode" not in st.session_state: st.session_state.app_mode = "🤖 全市場自動監控推薦"
-
-with st.sidebar:
-    st.header("👑 AI 股票智慧系統")
-    st.session_state.app_mode = st.radio("請選擇功能模式：", ["🤖 全市場自動監控推薦", "🔍 個股自主搜尋分析", "🇺🇸 美股自主搜尋分析"])
-    st.write("---")
-
-# =========================================================
-# 模式 A: 全市場自動監控
-# =========================================================
-if st.session_state.app_mode == "🤖 全市場自動監控推薦":
-    st.title("🌐 台股全市場 AI 自動監控")
-    st.caption(f"🕒 資料最後更新時間：{get_tw_time_text()}")
-
-    with st.sidebar:
-        st.subheader("📊 掃描設定")
-        min_volume = st.number_input("最低成交量門檻(張)", min_value=500, max_value=50000, value=1000, step=500)
-        min_stars = st.slider("最低綜合技術星級", min_value=1, max_value=5, value=3)
-        refresh_seconds = st.slider("自動刷新秒數", min_value=30, max_value=120, value=60, step=10)
-        if st.button("🔄 立即重新掃描"): st.rerun()
-
-    if HAS_AUTOREFRESH: st_autorefresh(interval=refresh_seconds * 1000, key="market_auto")
-
-    picks = scan_tw_market(min_volume, min_stars)
-    
-    if picks.empty:
-        st.warning("目前沒有符合條件的標的。")
-    else:
-        st.success("🎉 AI 最新精選強勢標的")
-        st.dataframe(picks, use_container_width=True, hide_index=True)
-
-# =========================================================
-# 模式 B: 台股搜尋
-# =========================================================
-elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
-    st.title("🔍 台股自主搜尋與量價分析")
-    
-    with st.sidebar:
-        st.subheader("🔄 自動刷新設定")
-        tw_auto = st.checkbox("開啟自動刷新", value=False)
-        if tw_auto:
-            tw_refresh = st.slider("刷新秒數", 15, 120, 30, step=5)
-            st_autorefresh(interval=tw_refresh * 1000, key="tw_auto")
-    
-    user_select = st.selectbox("👉 請選擇或輸入台股代號/名稱 (支援中文)：", TW_DISPLAY_OPTIONS)
-    
-    if user_select:
-        stock_info = next((s for s in TW_STOCKS if s["display_name"] == user_select), None)
-        if stock_info:
-            st.caption(f"🕒 資料最後更新時間：{get_tw_time_text()}")
-            render_analysis(stock_info, "張", 1000, "NT$")
-
-# =========================================================
-# 模式 C: 美股搜尋
-# =========================================================
-elif st.session_state.app_mode == "🇺🇸 美股自主搜尋分析":
-    st.title("🇺🇸 美股自主搜尋與量價分析")
-    
-    with st.sidebar:
-        st.subheader("🔄 自動刷新設定")
-        us_auto = st.checkbox("開啟自動刷新", value=False)
-        if us_auto:
-            us_refresh = st.slider("刷新秒數", 15, 120, 30, step=5)
-            st_autorefresh(interval=us_refresh * 1000, key="us_auto")
-
-    us_input = st.text_input("👉 輸入美股 / ETF 代號 (例如 NVDA, TSLA, QQQ)：", "NVDA").strip().upper()
-    
-    if us_input:
-        stock_info = {"code": us_input, "name": us_input, "yahoo_symbol": us_input}
-        st.caption(f"🕒 資料最後更新時間：{get_tw_time_text()}")
-        render_analysis(stock_info, "股", 1, "US$")
+def get_long_prediction(stars):
+    """短中長期完整走勢評語"""
+    if stars == 5: return "🔥 **長線波段：極度看漲 (Strong Buy)**\n均線結構與量價動能完美，極高機率發動大波段行情，適合順勢積極操作。"
+    if stars == 4: return "🚀 **長線波段：穩健看漲 (Buy)**\n多頭趨勢成型，長短天期均線皆給予強大支撐。建議等待回測不破再行進場。"
+    if stars == 3: return "📈 **中線走勢：溫和偏多 (Accumulate)**\n目前已站上關鍵支撐，但動能尚未完全爆發。預期短期將震盪走高，可逢低少量佈局。"
+    if stars == 2: return "➖ **短線型態：中性盤整 (Hold)**\n多空勢均力敵，技術面正處於區間震盪階段。建議靜待帶量突破方向再行動。"
+    if stars == 1: return "📉 **短線型態：轉弱疑慮 (Underperform)**\n股價已跌破重要支撐，且
