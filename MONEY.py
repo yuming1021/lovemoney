@@ -94,6 +94,24 @@ TW_STOCKS = get_tw_market_symbols()
 TW_DISPLAY_OPTIONS = [s["display_name"] for s in TW_STOCKS]
 
 # =========================================================
+# 資料下載與技術分析快取
+# =========================================================
+@st.cache_data(ttl=45, show_spinner=False)
+def download_history_one(yahoo_symbol, period="6mo"):
+    return yf.Ticker(yahoo_symbol).history(period=period, auto_adjust=False)
+
+@st.cache_data(ttl=45, show_spinner=False)
+def download_history_candidates(candidates, period="6mo"):
+    for symbol in candidates:
+        try:
+            df = yf.Ticker(symbol).history(period=period, auto_adjust=False)
+            if df is not None and not df.empty and len(df.dropna(how="all")) >= 50:
+                return symbol, df
+        except Exception:
+            continue
+    return candidates[0] if candidates else "", pd.DataFrame()
+
+# =========================================================
 # 指標運算與 AI 預測邏輯
 # =========================================================
 def prepare_indicators(df):
@@ -121,8 +139,6 @@ def get_long_prediction(stars):
 
 def calc_metrics(df, volume_divisor):
     if df is None or len(df) < 20: return None
-    
-    # 💡 核心修正：同時取出最後一行（今天）與倒數第二行（昨天）的資料
     latest = df.iloc[-1]
     prev_day = df.iloc[-2]
     
@@ -130,8 +146,6 @@ def calc_metrics(df, volume_divisor):
         current_price = float(latest["Close"])
         today_open = float(latest["Open"])
         today_vol = float(latest["Volume"])
-        
-        # 🌟 真正的昨日收盤價，用來當作漲跌幅的基準分母
         prev_close = float(prev_day["Close"])
         
         ma5 = float(latest["MA5"])
@@ -146,7 +160,6 @@ def calc_metrics(df, volume_divisor):
 
     if any(pd.isna(x) for x in [current_price, prev_close, ma20]) or ma20 == 0 or prev_close == 0: return None
 
-    # 🌟 漲跌幅修正公式：(今天最新價 - 昨天收盤價) / 昨天收盤價
     price_change = ((current_price - prev_close) / prev_close) * 100
     bias_ratio = ((current_price - ma20) / ma20) * 100
 
@@ -269,6 +282,15 @@ if "app_mode" not in st.session_state: st.session_state.app_mode = "🤖 全市�
 
 with st.sidebar:
     st.header("👑 AI 股票智慧系統")
+
+    # 💡 亮點新增：全局強制刷新大按鈕
+    if st.button("🔄 立即強制全面刷新", type="primary", use_container_width=True):
+        get_tw_market_symbols.clear()
+        download_history_one.clear()
+        download_history_candidates.clear()
+        st.rerun()
+        
+    st.write("---")
     st.session_state.app_mode = st.radio("請選擇功能模式：", ["🤖 全市場自動監控推薦", "🔍 個股自主搜尋分析", "🇺🇸 美股自主搜尋分析"])
     st.write("---")
 
@@ -284,7 +306,6 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
         min_volume = st.number_input("最低成交量門檻(張)", min_value=500, max_value=50000, value=1000, step=500)
         min_stars = st.slider("最低綜合技術星級", min_value=1, max_value=5, value=3)
         refresh_seconds = st.slider("自動刷新秒數", min_value=30, max_value=120, value=60, step=10)
-        if st.button("🔄 立即重新掃描"): st.rerun()
 
     if HAS_AUTOREFRESH: st_autorefresh(interval=refresh_seconds * 1000, key="market_auto")
 
