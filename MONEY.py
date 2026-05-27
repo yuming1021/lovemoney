@@ -14,11 +14,11 @@ except Exception:
     HAS_AUTOREFRESH = False
 
 # =========================================================
-# 基本設定與時間 (加入封印系統選單的 CSS)
+# 基本設定與時間
 # =========================================================
 st.set_page_config(page_title="AI 股票智慧系統", page_icon="📈", layout="wide")
 
-# 🚫 徹底隱藏右上角選單與預設快捷鍵，防止誤觸 Clear Cache 視窗
+# 隱藏預設選單防止干擾
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -91,6 +91,7 @@ def get_tw_market_symbols():
     return stocks
 
 TW_STOCKS = get_tw_market_symbols()
+TW_DISPLAY_OPTIONS = [s["display_name"] for s in TW_STOCKS]
 
 # =========================================================
 # 指標運算與 AI 預測邏輯
@@ -113,25 +114,40 @@ def prepare_indicators(df):
 def get_long_prediction(stars):
     if stars == 5: return "🔥 **長線波段：極度看漲 (Strong Buy)**\n均線結構與量價動能完美，極高機率發動大波段行情，適合順勢積極操作。"
     if stars == 4: return "🚀 **長線波段：穩健看漲 (Buy)**\n多頭趨勢成型，長短天期均線皆給予強大支撐。建議等待回測不破再行進場。"
-    if stars == 3: return "📈 **中線走勢：溫鮮偏多 (Accumulate)**\n目前已站上關鍵支撐，但動能尚未完全爆發。預期短期將震盪走高，可逢低少量佈局。"
+    if stars == 3: return "📈 **中線走勢：溫和偏多 (Accumulate)**\n目前已站上關鍵支撐，但動能尚未完全爆發。預期短期將震盪走高，可逢低少量佈局。"
     if stars == 2: return "➖ **短線型態：中性盤整 (Hold)**\n多空勢均力敵，技術面正處於區間震盪階段。建議靜待帶量突破方向再行動。"
     if stars == 1: return "📉 **短線型態：轉弱疑慮 (Underperform)**\n股價已跌破重要支撐，且均線開始下彎。短線面臨較大回檔壓力，建議退場觀望。"
     return "🚨 **長線波段：極度弱勢 (Strong Sell)**\n空頭格局完全成型，K線與成交量顯示賣壓沉重。極有可能持續向下探底，請嚴格避開！"
 
 def calc_metrics(df, volume_divisor):
     if df is None or len(df) < 20: return None
+    
+    # 💡 核心修正：同時取出最後一行（今天）與倒數第二行（昨天）的資料
     latest = df.iloc[-1]
+    prev_day = df.iloc[-2]
     
     try:
-        current_price, today_open, today_vol = float(latest["Close"]), float(latest["Open"]), float(latest["Volume"])
-        ma5, ma10, ma20, ma50 = float(latest["MA5"]), float(latest["MA10"]), float(latest["MA20"]), float(latest["MA50"])
-        vol_ma5, low5, low10 = float(latest["Vol_MA5"]), float(latest["Low5"]), float(latest["Low10"])
+        current_price = float(latest["Close"])
+        today_open = float(latest["Open"])
+        today_vol = float(latest["Volume"])
+        
+        # 🌟 真正的昨日收盤價，用來當作漲跌幅的基準分母
+        prev_close = float(prev_day["Close"])
+        
+        ma5 = float(latest["MA5"])
+        ma10 = float(latest["MA10"])
+        ma20 = float(latest["MA20"])
+        ma50 = float(latest["MA50"])
+        vol_ma5 = float(latest["Vol_MA5"])
+        low5 = float(latest["Low5"])
+        low10 = float(latest["Low10"])
         atr14 = float(latest["ATR14"]) if not pd.isna(latest["ATR14"]) else (current_price * 0.02)
     except: return None
 
-    if any(pd.isna(x) for x in [current_price, today_open, ma20]) or ma20 == 0: return None
+    if any(pd.isna(x) for x in [current_price, prev_close, ma20]) or ma20 == 0 or prev_close == 0: return None
 
-    price_change = ((current_price - today_open) / today_open) * 100
+    # 🌟 漲跌幅修正公式：(今天最新價 - 昨天收盤價) / 昨天收盤價
+    price_change = ((current_price - prev_close) / prev_close) * 100
     bias_ratio = ((current_price - ma20) / ma20) * 100
 
     stars = sum([current_price > ma20, ma20 > ma50, ma5 > ma10, (current_price > today_open and today_vol > vol_ma5), (0 < bias_ratio < 8)])
@@ -186,7 +202,7 @@ def render_analysis(stock_info, volume_unit, volume_divisor, currency, candidate
     metrics = calc_metrics(df, volume_divisor)
     
     if metrics is None:
-        st.error(f"無法取得 {stock_info['name']} 的歷史資料，請確認代號是否正確或該標的已下市。")
+        st.error(f"無法取得 {stock_info['name']} 的歷史資料，請確認代號是否正確。")
         return
 
     draw_stock_chart(df, volume_unit, volume_divisor)
@@ -268,6 +284,7 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
         min_volume = st.number_input("最低成交量門檻(張)", min_value=500, max_value=50000, value=1000, step=500)
         min_stars = st.slider("最低綜合技術星級", min_value=1, max_value=5, value=3)
         refresh_seconds = st.slider("自動刷新秒數", min_value=30, max_value=120, value=60, step=10)
+        if st.button("🔄 立即重新掃描"): st.rerun()
 
     if HAS_AUTOREFRESH: st_autorefresh(interval=refresh_seconds * 1000, key="market_auto")
 
@@ -280,7 +297,7 @@ if st.session_state.app_mode == "🤖 全市場自動監控推薦":
         st.dataframe(picks, use_container_width=True, hide_index=True)
 
 # =========================================================
-# 模式 B: 台股搜尋 (萬能輸入框版)
+# 模式 B: 台股搜尋
 # =========================================================
 elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
     st.title("🔍 台股自主搜尋與量價分析")
@@ -292,23 +309,19 @@ elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
             tw_refresh = st.slider("刷新秒數", 15, 120, 30, step=5)
             st_autorefresh(interval=tw_refresh * 1000, key="tw_auto")
     
-    # 💡 關鍵修復：把限制死的選單，改成「萬能文字輸入框」
     user_input = st.text_input("👉 請輸入台股代號 (如 2330, 00929) 或中文名稱：", value="2330").strip()
     
     if user_input:
         stock_info = None
         candidates = []
         
-        # 如果輸入的是數字 (代號)，直通 Yahoo 強制查詢
         if user_input.isdigit():
             stock_info = {"code": user_input, "name": user_input, "yahoo_symbol": f"{user_input}.TW"}
-            candidates = [f"{user_input}.TW", f"{user_input}.TWO"] # 上市上櫃都試試看
-            # 嘗試補上中文名稱
+            candidates = [f"{user_input}.TW", f"{user_input}.TWO"]
             for s in TW_STOCKS:
                 if s["code"] == user_input:
                     stock_info["name"] = s["name"]
                     break
-        # 如果輸入的是中文，從名單中反查
         else:
             for s in TW_STOCKS:
                 if user_input in s["name"] or user_input in s["code"]:
@@ -319,7 +332,7 @@ elif st.session_state.app_mode == "🔍 個股自主搜尋分析":
             st.caption(f"🕒 資料最後更新時間：{get_tw_time_text()}")
             render_analysis(stock_info, "張", 1000, "NT$", candidates=candidates)
         else:
-            st.warning(f"找不到名稱包含「{user_input}」的股票，請直接輸入股票代號 (例如: 2330)。")
+            st.warning(f"找不到名稱包含「{user_input}」的股票，請嘗試輸入代號。")
 
 # =========================================================
 # 模式 C: 美股搜尋
