@@ -18,7 +18,6 @@ except Exception:
 # =========================================================
 st.set_page_config(page_title="AI 股票智慧系統", page_icon="📈", layout="wide")
 
-# 隱藏預設選單防止干擾
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -33,6 +32,7 @@ def get_tw_time_text(): return datetime.now(TZ_TW).strftime("%Y-%m-%d %H:%M:%S")
 # =========================================================
 # YFinance 資料清洗機制
 # =========================================================
+@st.cache_data(ttl=15, show_spinner=False)
 def safe_history(symbol, period="6mo"):
     try:
         df = yf.Ticker(symbol).history(period=period, auto_adjust=False)
@@ -88,28 +88,11 @@ def get_tw_market_symbols():
                     vol = str(item.get("TradingVolume", item.get("成交股數", "0"))).replace(",", "")
                     stocks.append({"code": code, "name": name, "yahoo_symbol": f"{code}.TWO", "display_name": f"{code} {name}", "volume_shares": int(float(vol)) if vol.replace(".","",1).isdigit() else 0, "market": "上櫃"})
     except: pass
+    
     return stocks
 
 TW_STOCKS = get_tw_market_symbols()
 TW_DISPLAY_OPTIONS = [s["display_name"] for s in TW_STOCKS]
-
-# =========================================================
-# 資料下載與技術分析快取
-# =========================================================
-@st.cache_data(ttl=45, show_spinner=False)
-def download_history_one(yahoo_symbol, period="6mo"):
-    return yf.Ticker(yahoo_symbol).history(period=period, auto_adjust=False)
-
-@st.cache_data(ttl=45, show_spinner=False)
-def download_history_candidates(candidates, period="6mo"):
-    for symbol in candidates:
-        try:
-            df = yf.Ticker(symbol).history(period=period, auto_adjust=False)
-            if df is not None and not df.empty and len(df.dropna(how="all")) >= 50:
-                return symbol, df
-        except Exception:
-            continue
-    return candidates[0] if candidates else "", pd.DataFrame()
 
 # =========================================================
 # 指標運算與 AI 預測邏輯
@@ -143,18 +126,10 @@ def calc_metrics(df, volume_divisor):
     prev_day = df.iloc[-2]
     
     try:
-        current_price = float(latest["Close"])
-        today_open = float(latest["Open"])
-        today_vol = float(latest["Volume"])
+        current_price, today_open, today_vol = float(latest["Close"]), float(latest["Open"]), float(latest["Volume"])
         prev_close = float(prev_day["Close"])
-        
-        ma5 = float(latest["MA5"])
-        ma10 = float(latest["MA10"])
-        ma20 = float(latest["MA20"])
-        ma50 = float(latest["MA50"])
-        vol_ma5 = float(latest["Vol_MA5"])
-        low5 = float(latest["Low5"])
-        low10 = float(latest["Low10"])
+        ma5, ma10, ma20, ma50 = float(latest["MA5"]), float(latest["MA10"]), float(latest["MA20"]), float(latest["MA50"])
+        vol_ma5, low5, low10 = float(latest["Vol_MA5"]), float(latest["Low5"]), float(latest["Low10"])
         atr14 = float(latest["ATR14"]) if not pd.isna(latest["ATR14"]) else (current_price * 0.02)
     except: return None
 
@@ -278,20 +253,24 @@ def scan_tw_market(min_volume_lots, min_stars, batch_size=80):
 # =========================================================
 # 側邊欄與頁面導航
 # =========================================================
-if "app_mode" not in st.session_state: st.session_state.app_mode = "🤖 全市場自動監控推薦"
+mode_options = ["🤖 全市場自動監控推薦", "🔍 個股自主搜尋分析", "🇺🇸 美股自主搜尋分析"]
+if "app_mode" not in st.session_state: 
+    st.session_state.app_mode = mode_options[0]
 
 with st.sidebar:
     st.header("👑 AI 股票智慧系統")
 
-    # 💡 亮點新增：全局強制刷新大按鈕
+    # 💡 完美修復：按鈕強制清除快取，且不會重置導航
     if st.button("🔄 立即強制全面刷新", type="primary", use_container_width=True):
         get_tw_market_symbols.clear()
-        download_history_one.clear()
-        download_history_candidates.clear()
+        safe_history.clear()
         st.rerun()
         
     st.write("---")
-    st.session_state.app_mode = st.radio("請選擇功能模式：", ["🤖 全市場自動監控推薦", "🔍 個股自主搜尋分析", "🇺🇸 美股自主搜尋分析"])
+    
+    # 💡 完美修復：利用 index 鎖住目前的選單位置
+    current_index = mode_options.index(st.session_state.app_mode) if st.session_state.app_mode in mode_options else 0
+    st.session_state.app_mode = st.radio("請選擇功能模式：", mode_options, index=current_index)
     st.write("---")
 
 # =========================================================
