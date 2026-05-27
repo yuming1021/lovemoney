@@ -68,21 +68,29 @@ def clean_symbol(text):
 
 
 # =========================================================
-# 台股清單
+# 台股清單：上市 TWSE + 上櫃 TPEx
 # =========================================================
-@st.cache_data(ttl=3600, show_spinner=False)
+def _pick_first(item, keys, default=""):
+    for key in keys:
+        if key in item and item.get(key) not in [None, ""]:
+            return item.get(key)
+    return default
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
 def get_twse_symbols():
+    """抓上市股票與 ETF 清單。"""
     fallback = [
-        {"code": "2330", "name": "台積電", "yahoo_symbol": "2330.TW", "display_name": "2330 台積電", "volume_shares": 10_000_000},
-        {"code": "2317", "name": "鴻海", "yahoo_symbol": "2317.TW", "display_name": "2317 鴻海", "volume_shares": 10_000_000},
-        {"code": "2454", "name": "聯發科", "yahoo_symbol": "2454.TW", "display_name": "2454 聯發科", "volume_shares": 10_000_000},
-        {"code": "0050", "name": "元大台灣50", "yahoo_symbol": "0050.TW", "display_name": "0050 元大台灣50", "volume_shares": 10_000_000},
-        {"code": "006208", "name": "富邦台50", "yahoo_symbol": "006208.TW", "display_name": "006208 富邦台50", "volume_shares": 10_000_000},
+        {"code": "2330", "name": "台積電", "yahoo_symbol": "2330.TW", "display_name": "2330 台積電", "volume_shares": 10_000_000, "market": "上市"},
+        {"code": "2317", "name": "鴻海", "yahoo_symbol": "2317.TW", "display_name": "2317 鴻海", "volume_shares": 10_000_000, "market": "上市"},
+        {"code": "2454", "name": "聯發科", "yahoo_symbol": "2454.TW", "display_name": "2454 聯發科", "volume_shares": 10_000_000, "market": "上市"},
+        {"code": "0050", "name": "元大台灣50", "yahoo_symbol": "0050.TW", "display_name": "0050 元大台灣50", "volume_shares": 10_000_000, "market": "上市"},
+        {"code": "006208", "name": "富邦台50", "yahoo_symbol": "006208.TW", "display_name": "006208 富邦台50", "volume_shares": 10_000_000, "market": "上市"},
     ]
     url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, headers=headers, timeout=12)
         if res.status_code != 200:
             return fallback
         data = res.json()
@@ -99,13 +107,58 @@ def get_twse_symbols():
                     "yahoo_symbol": f"{code}.TW",
                     "display_name": f"{code} {name}",
                     "volume_shares": volume_shares,
+                    "market": "上市",
                 })
         return output if output else fallback
     except Exception:
         return fallback
 
 
-TW_STOCKS = get_twse_symbols()
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_tpex_symbols():
+    """抓上櫃股票清單。TPEx 欄位名稱偶爾會調整，所以用多組 key 容錯。"""
+    urls = [
+        "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes",
+        "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
+    ]
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for url in urls:
+        try:
+            res = requests.get(url, headers=headers, timeout=12)
+            if res.status_code != 200:
+                continue
+            data = res.json()
+            output = []
+            for item in data:
+                code = str(_pick_first(item, [
+                    "SecuritiesCompanyCode", "SecuritiesCode", "Code", "代號", "股票代號", "證券代號"
+                ], "")).strip()
+                name = str(_pick_first(item, [
+                    "CompanyName", "SecuritiesCompanyName", "Name", "名稱", "股票名稱", "證券名稱"
+                ], "")).strip()
+                vol_text = str(_pick_first(item, [
+                    "TradingVolume", "TradeVolume", "成交股數", "成交量"
+                ], "0")).replace(",", "")
+                volume_shares = int(float(vol_text)) if vol_text.replace(".", "", 1).isdigit() else 0
+                if code.isdigit() and (len(code) == 4 or code.startswith("00")):
+                    output.append({
+                        "code": code,
+                        "name": name or code,
+                        "yahoo_symbol": f"{code}.TWO",
+                        "display_name": f"{code} {name or code}",
+                        "volume_shares": volume_shares,
+                        "market": "上櫃",
+                    })
+            if output:
+                return output
+        except Exception:
+            continue
+    return []
+
+
+TWSE_STOCKS = get_twse_symbols()
+TPEX_STOCKS = get_tpex_symbols()
+TW_STOCKS = TWSE_STOCKS + [s for s in TPEX_STOCKS if s["code"] not in {x["code"] for x in TWSE_STOCKS}]
 TW_BY_CODE = {s["code"]: s for s in TW_STOCKS}
 TW_DISPLAY_OPTIONS = [s["display_name"] for s in TW_STOCKS]
 
@@ -304,33 +357,73 @@ def render_analysis(stock_info, volume_unit, volume_divisor, currency, subtitle,
 
 
 # =========================================================
-# 台股全市場掃描
+# 台股全市場掃描：盤中即時重抓，不使用 cache 卡舊資料
 # =========================================================
-@st.cache_data(ttl=20, show_spinner=False)
-def scan_tw_market(min_volume_lots, min_stars, refresh_count):
-    # refresh_count 放進參數，是為了自動刷新時真的重新抓資料，不被 cache 永遠吃掉。
-    active_pool = [s for s in TW_STOCKS if s["volume_shares"] >= min_volume_lots * 1000]
-    result = []
-    if not active_pool:
-        return pd.DataFrame(), get_tw_time_text()
+def _extract_symbol_df(bulk, symbol):
+    if bulk is None or bulk.empty:
+        return pd.DataFrame()
+    if isinstance(bulk.columns, pd.MultiIndex):
+        level0 = list(bulk.columns.get_level_values(0).unique())
+        if symbol not in level0:
+            return pd.DataFrame()
+        return bulk[symbol].dropna(how="all")
+    return bulk.dropna(how="all")
 
-    try:
-        symbols = [s["yahoo_symbol"] for s in active_pool]
-        bulk = yf.download(symbols, period="3mo", group_by="ticker", progress=False, auto_adjust=False, threads=True)
-        for stock in active_pool:
+
+def scan_tw_market_live(min_volume_lots, min_stars, refresh_count, market_scope="上市", batch_size=80, max_scan=0):
+    """
+    盤中推薦用：每次自動刷新都重新向 yfinance 下載。
+    不加 st.cache_data，避免看起來刷新但其實一直吃舊資料。
+    """
+    if market_scope == "上市":
+        base_pool = TWSE_STOCKS
+    elif market_scope == "上櫃":
+        base_pool = TPEX_STOCKS
+    else:
+        base_pool = TW_STOCKS
+
+    active_pool = [s for s in base_pool if int(s.get("volume_shares", 0)) >= min_volume_lots * 1000]
+    active_pool = sorted(active_pool, key=lambda x: int(x.get("volume_shares", 0)), reverse=True)
+    if max_scan and max_scan > 0:
+        active_pool = active_pool[:int(max_scan)]
+
+    result = []
+    scanned = 0
+    failed_batches = 0
+
+    if not active_pool:
+        return pd.DataFrame(), get_tw_time_text(), 0, 0, "沒有符合成交量門檻的股票。"
+
+    progress = st.progress(0, text=f"準備掃描 {len(active_pool)} 檔股票……")
+    status = st.empty()
+
+    for start_idx in range(0, len(active_pool), batch_size):
+        batch = active_pool[start_idx:start_idx + batch_size]
+        symbols = [s["yahoo_symbol"] for s in batch]
+        try:
+            bulk = yf.download(
+                symbols,
+                period="3mo",
+                group_by="ticker",
+                progress=False,
+                auto_adjust=False,
+                threads=True,
+                timeout=20,
+            )
+        except Exception:
+            failed_batches += 1
+            bulk = pd.DataFrame()
+
+        for stock in batch:
+            scanned += 1
             try:
-                symbol = stock["yahoo_symbol"]
-                if isinstance(bulk.columns, pd.MultiIndex):
-                    if symbol not in bulk.columns.get_level_values(0):
-                        continue
-                    raw = bulk[symbol].dropna(how="all")
-                else:
-                    raw = bulk.dropna(how="all")
+                raw = _extract_symbol_df(bulk, stock["yahoo_symbol"])
                 df = prepare_indicators(raw)
                 metrics = calc_metrics(df, volume_divisor=1000)
                 if metrics is None or metrics["stars"] < min_stars:
                     continue
                 result.append({
+                    "市場": stock.get("market", ""),
                     "代號": stock["code"],
                     "名稱": stock["name"],
                     "當前現價": round(metrics["current_price"], 2),
@@ -344,12 +437,25 @@ def scan_tw_market(min_volume_lots, min_stars, refresh_count):
                 })
             except Exception:
                 continue
-    except Exception:
-        return pd.DataFrame(), get_tw_time_text()
+
+        done_ratio = min((start_idx + len(batch)) / len(active_pool), 1.0)
+        progress.progress(done_ratio, text=f"正在掃描：{start_idx + len(batch)} / {len(active_pool)} 檔")
+        status.caption(f"目前已找到 {len(result)} 檔符合條件；本次自動刷新序號：{refresh_count}")
+
+    progress.empty()
+    status.empty()
 
     if not result:
-        return pd.DataFrame(), get_tw_time_text()
-    return pd.DataFrame(result).sort_values("score", ascending=False).drop(columns=["score"]), get_tw_time_text()
+        note = f"已掃描 {scanned} 檔，沒有符合條件的標的。"
+        if failed_batches:
+            note += f" 有 {failed_batches} 批資料下載失敗，可能是 yfinance 暫時限流。"
+        return pd.DataFrame(), get_tw_time_text(), scanned, len(active_pool), note
+
+    df_result = pd.DataFrame(result).sort_values(["score", "成交量(張)"], ascending=False).drop(columns=["score"])
+    note = f"已掃描 {scanned} / {len(active_pool)} 檔。"
+    if failed_batches:
+        note += f" 有 {failed_batches} 批下載失敗，結果可能不完整。"
+    return df_result, get_tw_time_text(), scanned, len(active_pool), note
 
 
 # =========================================================
@@ -397,36 +503,50 @@ if st.session_state.app_mode == MODE_MARKET:
         st.subheader("📊 掃描條件")
         min_volume = st.number_input("最低成交量門檻（張）", min_value=1000, max_value=50000, value=3000, step=1000)
         min_stars = st.slider("最低綜合技術星級", min_value=1, max_value=5, value=3)
+        market_scope = st.selectbox("掃描範圍", ["上市", "上櫃", "上市+上櫃"], index=0)
         refresh_seconds = st.slider("盤中自動刷新秒數", min_value=30, max_value=180, value=60, step=10)
+        batch_size = st.selectbox("每批下載檔數", [40, 60, 80, 100], index=2)
+        max_scan = st.number_input("最多掃描檔數（0 = 不限制）", min_value=0, max_value=3000, value=0, step=50)
         manual_refresh = st.button("🔄 立即重新掃描")
-
-    refresh_count = 0
-    if market_open:
-        refresh_count = safe_autorefresh(refresh_seconds, key="market_refresh")
-
-    if manual_refresh:
-        scan_tw_market.clear()
-        download_history_one.clear()
-        download_history_candidates.clear()
-        refresh_count += 999999
 
     if not market_open:
         st.warning(f"⏸️ {msg}\n\n非盤中時間不提供台股全市場自動掃描，避免雲端一直重跑造成網站卡住。")
         st.info("你仍然可以使用左側的「台股自主搜尋分析」與「美股自主搜尋分析」。")
     else:
-        st.info(f"⚡ 正在掃描符合條件的台股標的……目前刷新次數：{refresh_count}")
-        picks, update_time = scan_tw_market(min_volume, min_stars, refresh_count)
+        # 這裡才啟動真正自動刷新。每次刷新都重新執行 scan_tw_market_live()。
+        refresh_count = safe_autorefresh(refresh_seconds, key="market_live_auto_refresh")
+        if manual_refresh:
+            refresh_count += 10_000_000
+
+        st.info(
+            f"⚡ 盤中自動刷新已啟動：每 {refresh_seconds} 秒重新抓取一次。"
+            f"目前刷新序號：{refresh_count}。"
+        )
+        st.caption(
+            "這一版的盤中推薦不使用 scan cache，也不使用 while True；"
+            "每次刷新都會重新向 yfinance 分批抓資料。"
+        )
+
+        picks, update_time, scanned, total_candidates, scan_note = scan_tw_market_live(
+            min_volume_lots=min_volume,
+            min_stars=min_stars,
+            refresh_count=refresh_count,
+            market_scope=market_scope,
+            batch_size=batch_size,
+            max_scan=max_scan,
+        )
+
+        st.caption(scan_note)
         if picks.empty:
             st.warning(f"目前沒有符合條件的標的。（更新時間：{update_time}）")
         else:
-            st.success(f"🎉 最新精選強勢標的（更新時間：{update_time}）")
+            st.success(f"🎉 最新精選強勢標的（更新時間：{update_time}，掃描 {scanned}/{total_candidates} 檔）")
             st.dataframe(
                 picks,
                 use_container_width=True,
                 hide_index=True,
                 column_config={"深度分析": st.column_config.LinkColumn("🔍 深度分析", display_text="👉 點我分析")},
             )
-        st.caption(f"盤中每 {refresh_seconds} 秒自動刷新一次；此版不使用 while True，也不做整頁 reload。")
 
 
 # =========================================================
